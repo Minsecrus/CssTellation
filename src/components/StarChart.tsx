@@ -424,7 +424,7 @@ export const StarChart: React.FC = () => {
                                 <div className="flex justify-between items-center">
                                     <span className="opacity-60">GitHub</span>
                                     <a
-                                        href="#"
+                                        href="https://github.com/Minsecrus/CssTellation"
                                         target="_blank"
                                         rel="noreferrer"
                                         className="text-blue-400 hover:text-blue-300 hover:underline transition-colors"
