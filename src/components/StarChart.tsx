@@ -5,6 +5,52 @@ import { cssColors, type ColorData } from '../data/colors';
 const SNAP_RADIUS = 20;
 const CHART_PADDING = 60; // 内边距，保证四周有点位空隙，防止Tooltip切边
 
+// RGB 转 HSV
+const rgbToHsv = (r: number, g: number, b: number) => {
+    const rNorm = r / 255;
+    const gNorm = g / 255;
+    const bNorm = b / 255;
+
+    const max = Math.max(rNorm, gNorm, bNorm);
+    const min = Math.min(rNorm, gNorm, bNorm);
+    const delta = max - min;
+
+    let h = 0;
+    let s = max === 0 ? 0 : (delta / max) * 100;
+    let v = max * 100;
+
+    if (delta !== 0) {
+        if (max === rNorm) {
+            h = ((gNorm - bNorm) / delta + (gNorm < bNorm ? 6 : 0)) * 60;
+        } else if (max === gNorm) {
+            h = ((bNorm - rNorm) / delta + 2) * 60;
+        } else {
+            h = ((rNorm - gNorm) / delta + 4) * 60;
+        }
+    }
+
+    return { h: Math.round(h), s: Math.round(s), v: Math.round(v) };
+};
+
+// RGB 转 CMYK
+const rgbToCmyk = (r: number, g: number, b: number) => {
+    const rNorm = r / 255;
+    const gNorm = g / 255;
+    const bNorm = b / 255;
+
+    const k = 1 - Math.max(rNorm, gNorm, bNorm);
+    const c = k === 1 ? 0 : (1 - rNorm - k) / (1 - k);
+    const m = k === 1 ? 0 : (1 - gNorm - k) / (1 - k);
+    const y = k === 1 ? 0 : (1 - bNorm - k) / (1 - k);
+
+    return {
+        c: Math.round(c * 100),
+        m: Math.round(m * 100),
+        y: Math.round(y * 100),
+        k: Math.round(k * 100)
+    };
+};
+
 type InteractionState =
     | { type: 'idle' }
     | { type: 'hover', x: number, y: number, h: number, l: number, rgbHex: string }
@@ -21,7 +67,9 @@ export const StarChart: React.FC = () => {
     // 锁定状态 (点击选中的颜色)
     const [selectedColor, setSelectedColor] = useState<ColorData | null>(null);
     // 复制反馈状态
-    const [copyStatus, setCopyStatus] = useState<'idle' | 'copied'>('idle');
+    const [copiedField, setCopiedField] = useState<string | null>(null);
+
+    const [isInfoOpen, setIsInfoOpen] = useState(false);
 
     // 1. 坐标转换核心函数 (增加 Padding 逻辑)
     // 将 Hue/Lightness 映射到带内边距的画布区域
@@ -117,19 +165,17 @@ export const StarChart: React.FC = () => {
     const handleClick = () => {
         if (interaction.type === 'snapped') {
             setSelectedColor(interaction.color);
-            setCopyStatus('idle'); // 重置复制状态
+            setCopiedField(null); // 重置复制状态
         } else {
             // 如果点击空白处，可以选择取消选择，或者保持不变，这里选择保持不变
         }
     };
 
     // 复制功能
-    const handleCopy = () => {
-        if (!selectedColor) return;
-        const json = JSON.stringify(selectedColor, null, 2);
-        navigator.clipboard.writeText(json).then(() => {
-            setCopyStatus('copied');
-            setTimeout(() => setCopyStatus('idle'), 2000);
+    const handleCopy = (value: string, field: string) => {
+        navigator.clipboard.writeText(value).then(() => {
+            setCopiedField(field);
+            setTimeout(() => setCopiedField(null), 2000);
         });
     };
 
@@ -182,68 +228,232 @@ export const StarChart: React.FC = () => {
                             <span className="font-bold" style={{ color: interaction.color.hex }}>
                                 {interaction.color.name}
                             </span>
-
-                            {/* 下面这行稍微改一下颜色逻辑，让它在白背景下也能看清 */}
-                            <span className={`ml-2 ${interaction.color.hsl.l < 50 ? 'text-slate-600' : 'opacity-60'}`}>
-                                Click to Lock
-                            </span>
                         </div>
                     </div>
                 )}
             </div>
 
             {/* --- 下部分：数据控制台 (10vh) --- */}
-            <div className="h-[10vh] min-h-[80px] bg-slate-900 border-t border-white/10 flex items-center px-6 gap-6 relative z-20 shadow-2xl">
-                {selectedColor ? (
-                    <>
-                        {/* 颜色预览块 */}
-                        <div
-                            className="w-16 h-16 rounded-lg shadow-inner border border-white/10 shrink-0 transition-colors duration-300"
-                            style={{ backgroundColor: selectedColor.hex }}
-                        />
+            <div className="h-[10vh] min-h-[100px] bg-slate-900 border-t border-white/10 flex items-center px-6 justify-between relative z-20 shadow-2xl">
 
-                        {/* 文本信息 */}
-                        <div className="flex flex-col justify-center gap-1 flex-1 overflow-hidden">
-                            <div className="flex items-baseline gap-3">
-                                <h2 className="text-xl font-bold tracking-wide text-white">
-                                    {selectedColor.name}
-                                </h2>
-                                <span className="text-sm opacity-70 font-mono">{selectedColor.hex}</span>
+                <div className="flex-1 flex items-center gap-6 overflow-hidden mr-4">
+                    {selectedColor ? (
+                        <>
+                            {/* 1. 颜色预览块 */}
+                            <div
+                                className="w-16 h-16 rounded-lg shadow-inner border border-white/10 shrink-0 transition-colors duration-300"
+                                style={{ backgroundColor: selectedColor.hex }}
+                            />
+
+                            {/* 2. 文本信息详情 */}
+                            <div className="flex flex-col justify-center flex-1 overflow-hidden">
+                                {/* 标题 */}
+                                <div className="flex items-baseline gap-2 mb-1">
+                                    <h2 className="text-xl font-bold tracking-wide text-white truncate">
+                                        {selectedColor.name}
+                                    </h2>
+                                </div>
+
+                                {/* 数据行容器 */}
+                                <div className="flex flex-col gap-0.5">
+
+                                    {/* 第一行: Hex (带复制) */}
+                                    <div className="flex items-center gap-2 group h-5">
+                                        <span className="text-sm opacity-90 font-mono text-white">{selectedColor.hex}</span>
+                                        <button
+                                            onClick={() => handleCopy(selectedColor.hex, 'hex')}
+                                            className="opacity-0 group-hover:opacity-100 transition-opacity px-1.5 py-0.5 text-[9px] rounded bg-white/10 hover:bg-white/20 text-white border border-white/10 active:scale-95 leading-none"
+                                        >
+                                            {copiedField === 'hex' ? '✓' : 'COPY'}
+                                        </button>
+                                    </div>
+
+                                    {/* 第二行: 紧凑的数值流 (RGB, HSL, HSV, CMYK) */}
+                                    <div className="flex flex-wrap gap-x-4 gap-y-0.5 items-center">
+
+                                        {/* RGB */}
+                                        <div className="flex items-center gap-1 group">
+                                            <span className="text-[10px] opacity-70 font-mono">
+                                                rgb({selectedColor.rgb.r}, {selectedColor.rgb.g}, {selectedColor.rgb.b})
+                                            </span>
+                                            <button
+                                                onClick={() => handleCopy(`rgb(${selectedColor.rgb.r}, ${selectedColor.rgb.g}, ${selectedColor.rgb.b})`, 'rgb')}
+                                                className="opacity-0 group-hover:opacity-100 transition-all px-1 py-0.5 text-[8px] rounded bg-white/10 hover:bg-white/20 text-white border border-white/10 active:scale-95 leading-none"
+                                            >
+                                                {copiedField === 'rgb' ? '✓' : 'CP'}
+                                            </button>
+                                        </div>
+
+                                        {/* HSL */}
+                                        <div className="flex items-center gap-1 group">
+                                            <span className="text-[10px] opacity-70 font-mono">
+                                                hsl({selectedColor.hsl.h}, {selectedColor.hsl.s}%, {selectedColor.hsl.l}%)
+                                            </span>
+                                            <button
+                                                onClick={() => handleCopy(`hsl(${selectedColor.hsl.h}, ${selectedColor.hsl.s}%, ${selectedColor.hsl.l}%)`, 'hsl')}
+                                                className="opacity-0 group-hover:opacity-100 transition-all px-1 py-0.5 text-[8px] rounded bg-white/10 hover:bg-white/20 text-white border border-white/10 active:scale-95 leading-none"
+                                            >
+                                                {copiedField === 'hsl' ? '✓' : 'CP'}
+                                            </button>
+                                        </div>
+
+                                        {/* HSV (计算) */}
+                                        {(() => {
+                                            const hsv = rgbToHsv(selectedColor.rgb.r, selectedColor.rgb.g, selectedColor.rgb.b);
+                                            return (
+                                                <div className="flex items-center gap-1 group hidden xl:flex">
+                                                    <span className="text-[10px] opacity-70 font-mono">
+                                                        hsv({hsv.h}, {hsv.s}%, {hsv.v}%)
+                                                    </span>
+                                                    <button
+                                                        onClick={() => handleCopy(`hsv(${hsv.h}, ${hsv.s}%, ${hsv.v}%)`, 'hsv')}
+                                                        className="opacity-0 group-hover:opacity-100 transition-all px-1 py-0.5 text-[8px] rounded bg-white/10 hover:bg-white/20 text-white border border-white/10 active:scale-95 leading-none"
+                                                    >
+                                                        {copiedField === 'hsv' ? '✓' : 'CP'}
+                                                    </button>
+                                                </div>
+                                            );
+                                        })()}
+
+                                        {/* CMYK (计算) */}
+                                        {(() => {
+                                            const cmyk = rgbToCmyk(selectedColor.rgb.r, selectedColor.rgb.g, selectedColor.rgb.b);
+                                            return (
+                                                <div className="flex items-center gap-1 group hidden 2xl:flex">
+                                                    <span className="text-[10px] opacity-70 font-mono">
+                                                        cmyk({cmyk.c}%, {cmyk.m}%, {cmyk.y}%, {cmyk.k}%)
+                                                    </span>
+                                                    <button
+                                                        onClick={() => handleCopy(`cmyk(${cmyk.c}%, ${cmyk.m}%, ${cmyk.y}%, ${cmyk.k}%)`, 'cmyk')}
+                                                        className="opacity-0 group-hover:opacity-100 transition-all px-1 py-0.5 text-[8px] rounded bg-white/10 hover:bg-white/20 text-white border border-white/10 active:scale-95 leading-none"
+                                                    >
+                                                        {copiedField === 'cmyk' ? '✓' : 'CP'}
+                                                    </button>
+                                                </div>
+                                            );
+                                        })()}
+                                    </div>
+                                </div>
                             </div>
-                            <div className="text-xs opacity-60 font-mono flex gap-4">
-                                <span>rgb({selectedColor.rgb.r}, {selectedColor.rgb.g}, {selectedColor.rgb.b})</span>
-                                <span>hsl({selectedColor.hsl.h}, {selectedColor.hsl.s}%, {selectedColor.hsl.l}%)</span>
-                            </div>
+                        </>
+                    ) : (
+                        /* 空状态提示 (现在位于 Flex 左侧) */
+                        <div className="flex justify-center items-center opacity-50 gap-3 w-full">
+                            <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
+                            <span className="text-sm tracking-widest uppercase">Select a star to analyze data</span>
                         </div>
+                    )}
+                </div>
 
-                        {/* 操作按钮 */}
-                        <div className="flex items-center gap-4">
-                            <div className="hidden md:block text-[10px] text-right opacity-30 leading-tight">
-                                JSON DATA<br />READY
+                {/* ======================= */}
+                {/* 右侧区域：操作按钮 (固定) */}
+                {/* ======================= */}
+                <div className="flex items-center gap-4 shrink-0">
+
+                    {/* JSON Copy 按钮 (只有选中时才出现) */}
+                    {selectedColor && (
+                        <>
+                            <div className="hidden md:block text-[10px] text-right opacity-50 leading-tight font-mono">
+                                JSON OBJECT<br />READY
                             </div>
                             <button
-                                onClick={handleCopy}
+                                onClick={() => handleCopy(JSON.stringify(selectedColor, null, 2), 'json')}
                                 className={`
-                  px-4 py-2 rounded font-bold text-sm transition-all active:scale-95
-                  ${copyStatus === 'copied'
+                  px-4 py-2 rounded font-bold text-sm transition-all active:scale-95 whitespace-nowrap
+                  ${copiedField === 'json'
                                         ? 'bg-green-500/20 text-green-400 border border-green-500/50'
                                         : 'bg-white/10 hover:bg-white/20 text-white border border-white/10'
                                     }
                 `}
                             >
-                                {copyStatus === 'copied' ? 'COPIED!' : 'COPY JSON'}
+                                {copiedField === 'json' ? 'COPIED!' : 'COPY JSON'}
                             </button>
-                        </div>
-                    </>
-                ) : (
-                    /* 空状态提示 */
-                    <div className="w-full flex items-center justify-center opacity-50 gap-2">
-                        <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
-                        <span className="text-sm tracking-widest uppercase">Select a star to analyze data</span>
-                    </div>
-                )}
-            </div>
+                            {/* 分割线 */}
+                            <div className="w-px h-8 bg-white/10 mx-2" />
+                        </>
+                    )}
 
+                    {/* Info 按钮 (永远存在！！) */}
+                    <button
+                        onClick={() => setIsInfoOpen(true)}
+                        className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-colors border border-white/5"
+                        aria-label="About"
+                    >
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            {/* 👇 全屏弹窗 Modal */}
+            {isInfoOpen && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+                    onClick={() => setIsInfoOpen(false)} // 点击背景关闭
+                >
+                    {/* 弹窗主体 */}
+                    <div
+                        className="bg-slate-900 border border-white/20 rounded-xl shadow-2xl max-w-lg w-full p-8 relative overflow-hidden"
+                        onClick={(e) => e.stopPropagation()} // 防止点击内容区域关闭弹窗
+                    >
+                        {/* 装饰光晕 */}
+                        <div className="absolute -top-10 -right-10 w-40 h-40 bg-blue-500/20 blur-[50px] rounded-full pointer-events-none" />
+
+                        {/* 标题 */}
+                        <h2 className="text-2xl font-bold text-white mb-2">About CssTellation</h2>
+                        <div className="h-1 w-10 bg-blue-500 rounded mb-6" />
+
+                        {/* 内容区域 (预留位置) */}
+                        <div className="space-y-4 text-slate-300 text-sm leading-relaxed">
+                            <p>
+                                A visual exploration of CSS Named Colors. Designed to help developers and designers discover the beauty hidden in standard web specifications.
+                            </p>
+
+                            {/* 项目信息列表 */}
+                            <div className="py-4 border-t border-white/10 border-b space-y-3">
+                                <div className="flex justify-between">
+                                    <span className="opacity-60">Version</span>
+                                    <span className="font-mono text-white">1.0.0</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="opacity-60">Stack</span>
+                                    <span className="font-mono text-white">React + TypeScript + Tailwind</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="opacity-60">GitHub</span>
+                                    <a
+                                        href="#"
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-blue-400 hover:text-blue-300 hover:underline transition-colors"
+                                    >
+                                        https://github.com/Minsecrus/CssTellation
+                                    </a>
+                                </div>
+                            </div>
+
+                            <p className="opacity-70 text-xs mt-4">
+                                Data source: CSS Color Module Level 4. <br />
+                                Built with precision and ❤️.
+                            </p>
+                        </div>
+
+                        {/* 关闭按钮 (右上角 X) */}
+                        <button
+                            onClick={() => setIsInfoOpen(false)}
+                            className="absolute top-4 right-4 p-2 text-white/50 hover:text-white transition-colors"
+                        >
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="18" y1="6" x2="6" y2="18"></line>
+                                <line x1="6" y1="6" x2="18" y2="18"></line>
+                            </svg>
+                        </button>
+
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
